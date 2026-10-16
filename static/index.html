@@ -518,7 +518,7 @@ function applyTheme(th){
   document.documentElement.dataset.theme=th;$("#themeIco").setAttribute("d",th==="light"?MOON:SUN);
   $("#themeMeta").content=th==="light"?"#F3F6FC":"#060912";
 }
-let theme=store.get("theme",null)||(matchMedia&&matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");
+let theme=store.get("theme","dark"); // dark by default; the toggle remembers the user's choice
 applyTheme(theme);
 $("#themeBtn").onclick=()=>{theme=theme==="light"?"dark":"light";store.set("theme",theme);applyTheme(theme)};
 const ZOOMS=[1,1.15,1.3];let zi=Math.max(0,ZOOMS.indexOf(store.get("zoom",1)));
