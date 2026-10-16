@@ -82,7 +82,7 @@ def ocr_image(data: bytes, filename: str, mime: str) -> str:
 EXTRACT_PROMPT = """You read OCR text from an Indian medicine strip/box. Return ONLY JSON:
 {"name": brand or product name, "salts": [generic active ingredients, lowercase, no strengths],
  "strength": "e.g. 500 mg or empty", "form": "tablet/capsule/syrup/etc or empty",
- "uses": "one plain sentence on what this medicine is usually used for (general, not advice)",
+ "uses": "a short noun phrase for what it is usually used for, e.g. 'fever and mild pain' or 'bacterial infections' (no verbs, not a sentence)",
  "label_directions": "only what the label itself prints about how to take it, else empty",
  "label_warnings": "only warnings printed on the label, else empty",
  "expiry_text": "the expiry text as printed, else empty",
@@ -99,10 +99,17 @@ def structure_medicine(ocr_text: str) -> dict:
 
 
 def _translate_one(text: str, lang: str) -> str:
-    r = requests.post(f"{BASE}/translate", headers={**HDR, "Content-Type": "application/json"},
-                      json={"input": text, "source_language_code": "en-IN", "target_language_code": lang,
-                            "model": "mayura:v1", "mode": "formal"}, timeout=40)
-    return r.json().get("translated_text", text) if r.ok else text
+    """Retries on 429/5xx so a busy moment does not silently fall back to English."""
+    for attempt in range(4):
+        r = requests.post(f"{BASE}/translate", headers={**HDR, "Content-Type": "application/json"},
+                          json={"input": text, "source_language_code": "en-IN", "target_language_code": lang,
+                                "model": "mayura:v1", "mode": "formal"}, timeout=40)
+        if r.ok:
+            return r.json().get("translated_text", text)
+        if r.status_code not in (429, 500, 502, 503, 504):
+            break
+        time.sleep(1.2 * (attempt + 1))
+    raise RuntimeError("translate failed")
 
 
 def translate(text: str, lang: str) -> str:
@@ -124,7 +131,9 @@ def translate(text: str, lang: str) -> str:
 
 def spoken_script(med: dict, verdict: dict, class_warn: list, lang: str) -> str:
     """4 short lines: what it is, label directions, warnings, what to ask the doctor. English, then translated."""
-    parts = [f"This is {med.get('name') or 'a medicine'}" + (f", {med['strength']}" if med.get("strength") else "") + ".",
+    name = (med.get("name") or "").strip() or "a medicine"
+    strength = (med.get("strength") or "").strip()
+    parts = [f"Medicine name: {name}" + (f", {strength}" if strength and (re.sub(r"\D", "", strength) or strength) not in re.sub(r"\s", "", name.lower()) else "") + ".",
              (f"It is generally used for {med['uses'].strip().rstrip('.')}." if (med.get("uses") or "").strip() else "")]
     if med.get("label_directions"):
         parts.append(f"The label says: {med['label_directions'].strip().rstrip('.')}.")
@@ -183,6 +192,9 @@ def manual(body: ManualIn):
         med = structure_medicine(f"Product name: {body.name}")
     except Exception:
         med = {"name": body.name, "salts": [], "uses": "", "confidence": "low"}
+    # No label was read, so never present directions/warnings: the model could only be guessing.
+    for k in ("label_directions", "label_warnings", "expiry_text"):
+        med[k] = ""
     cw = K.class_warnings_for(med.get("salts", []) + [body.name])
     verdict = K.expiry_verdict(None)
     script_en = spoken_script(med, verdict, cw, body.lang)
@@ -331,7 +343,7 @@ def ui(lang: str = "hi-IN"):
             out = out.rstrip(".।॥ ")
         return out
 
-    with ThreadPoolExecutor(6) as ex:
+    with ThreadPoolExecutor(3) as ex:
         vals = list(ex.map(one, UI_STRINGS.items()))
     return dict(zip(UI_STRINGS.keys(), vals))
 
