@@ -22,6 +22,26 @@ LLM_MAX_TOKENS = 3000  # reasoning is disabled per call; headroom stays high in 
 
 app = FastAPI(title="Dawai Dekho")
 
+# ---- spend guard: a hard cap on paid Sarvam calls per server run (protects a small credit balance) ----
+PAID_PATHS = {"/api/scan": 3.0, "/api/manual": 1.0, "/api/chat": 1.0, "/api/tts": 2.0, "/api/stt": 1.0}
+BUDGET_UNITS = float(os.environ.get("BUDGET_UNITS", "400"))  # ~ one scan = 3 units
+_spent = {"u": 0.0}
+
+
+@app.middleware("http")
+async def spend_guard(request, call_next):
+    cost = PAID_PATHS.get(request.url.path)
+    if cost:
+        if _spent["u"] + cost > BUDGET_UNITS:
+            return JSONResponse({"error": "budget_reached"}, status_code=429)
+        _spent["u"] += cost
+    return await call_next(request)
+
+
+@app.get("/api/budget")
+def budget():
+    return {"used": _spent["u"], "cap": BUDGET_UNITS}
+
 
 def _cache_get(name):
     p = CACHE / name
@@ -323,7 +343,10 @@ UI_STRINGS = {
     "morning": "Morning", "noon": "Afternoon", "night": "Night", "today": "Today", "taken": "Taken",
     "warnings": "Check these", "expiry": "Expiry", "not_clear": "Some details were not found on the pack. Check with a licensed chemist and ask for a bill.",
     "language": "Language", "emergency": "This may be an emergency", "ocr_text": "Text read from the pack",
-    "remind": "Remind me", "delete": "Delete", "helpline": "Health helpline", "calm": "Stay calm. Help is on the way if you call.",
+    "meds_short": "My meds", "hospital": "Nearest hospital", "pharmacy": "Nearest pharmacy",
+    "privacy": "Your saved medicines stay on this phone. Photos are sent securely to Sarvam AI only to read the label.",
+    "wipe": "Delete all my data", "share_list": "Share list with my doctor", "exp_past": "Expired", "exp_soon": "Expires soon",
+    "remind": "Remind me", "ok_save": "Save", "delete": "Delete", "helpline": "Health helpline", "calm": "Stay calm. Help is on the way if you call.",
 }
 
 
